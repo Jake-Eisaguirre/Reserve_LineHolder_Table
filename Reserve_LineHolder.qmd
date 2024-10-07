@@ -39,12 +39,12 @@ tryCatch({
 dbExecute(db_connection, "USE SCHEMA CREW_ANALYTICS")
 
 
-# Set current date variables
 current_date <- Sys.Date()  # Today's date
 week_prior <- current_date - 3  # Date three days prior
 week_prior_pairing_date <- current_date - 7  # Date seven days prior
+previous_bid_period <- substr(as.character((current_date)), 1, 7)
 
-
+raw_date <- Sys.Date()
 ```
 
 ## MS Schedule
@@ -58,16 +58,18 @@ view_masterhistory <- dbGetQuery(db_connection, q_master_history)
 
 ```
 
-## Clean MS
+## Clean MH
 ```{r}
 
-clean_ms <- view_masterhistory %>% 
-  select(CREW_INDICATOR, PAIRING_POSITION, CREW_ID, PAIRING_DATE, BID_PERIOD, LINE_TYPE) %>% 
-  group_by(CREW_INDICATOR, PAIRING_POSITION, CREW_ID, PAIRING_DATE) %>% 
-  distinct() %>% 
+clean_mh <- view_masterhistory %>% 
+  select(CREW_INDICATOR, PAIRING_POSITION, CREW_ID, PAIRING_DATE, BASE, BID_PERIOD, LINE_TYPE, UPDATE_DATE, UPDATE_TIME) %>% 
+  mutate(update_dt = paste(UPDATE_DATE, UPDATE_TIME, sep=" ")) %>% 
+  group_by(CREW_INDICATOR, PAIRING_POSITION, CREW_ID, PAIRING_DATE) %>%
+  filter(update_dt == max(update_dt)) %>% 
   filter(!CREW_ID %in% c("6", "8", "10", "11", "35", "21", "7", "18", "1", "2", "3", "4", 
                          "5", "9", "12", "13", "14", "15", "17", "19", "20", "25", "31", 
                          "32", "33", "34", "36", "37")) %>% 
+  filter(!BASE == "CVG") %>% 
   mutate(PAIRING_POSITION = if_else(PAIRING_POSITION == "RO", "FO", PAIRING_POSITION),
          PAIRING_POSITION = if_else(CREW_INDICATOR == "FA", "FA", PAIRING_POSITION)) %>% 
   drop_na() %>% 
@@ -76,12 +78,37 @@ clean_ms <- view_masterhistory %>%
 
 ```
 
+```{r}
+q_master_sched <- paste0("select CREW_ID, EQUIPMENT, PAIRING_POSITION, BID_DATE as BID_PERIOD
+                   from CT_MASTER_SCHEDULE WHERE BID_DATE = '", previous_bid_period, "';")
+
+
+raw_ms <- dbGetQuery(db_connection, q_master_sched)
+```
+
+## Clean MS
+```{r}
+clean_ms <- raw_ms%>% 
+  filter(!CREW_ID %in% c("6", "8", "10", "11", "35", "21", "7", "18", "1", "2", "3", "4", 
+                         "5", "9", "12", "13", "14", "15", "17", "19", "20", "25", "31", 
+                         "32", "33", "34", "36", "37")) %>% 
+  mutate(EQUIPMENT = if_else(PAIRING_POSITION == "FA", NA, EQUIPMENT)) %>% 
+  distinct() %>% 
+  filter(!EQUIPMENT == "33Y")
+
+
+```
+
+
 ## Gold Tier
 ```{r}
 
-gold_ms <- clean_ms %>% 
-  group_by(PAIRING_POSITION, PAIRING_DATE, LINE_TYPE) %>% 
-  reframe(DAILY_COUNT = n())
+gold_ms <- clean_mh %>% 
+  inner_join(clean_ms, by = c("CREW_ID", "BID_PERIOD", "PAIRING_POSITION")) %>% 
+  group_by(PAIRING_POSITION, PAIRING_DATE, BASE, EQUIPMENT, LINE_TYPE) %>% 
+  reframe(DAILY_COUNT = n()) %>% 
+  pivot_wider(names_from = LINE_TYPE, values_from = DAILY_COUNT) %>% 
+  mutate(R_L_perc = (R/B)*100)
 
 ```
 
