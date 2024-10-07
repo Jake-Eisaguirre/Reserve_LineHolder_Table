@@ -1,0 +1,87 @@
+---
+title: "Reserve_LineHolder_Table"
+format: html
+editor: source
+---
+
+## Packages
+```{r}
+# Ensure the 'librarian' package is installed and loaded
+if (!require(librarian)) {
+  install.packages("librarian")  # Install if not available
+  library(librarian)  # Load the package
+}
+
+# Use librarian to manage and load packages
+librarian::shelf(tidyverse, here, DBI, odbc)  # Load required packages
+
+
+```
+
+## DB Connection
+```{r}
+
+### Database Connection: Connect to `ENTERPRISE` database using Snowflake
+tryCatch({
+  db_connection <- DBI::dbConnect(odbc::odbc(),
+                                  Driver = "SnowflakeDSIIDriver",
+                                  Server = "hawaiianair.west-us-2.azure.snowflakecomputing.com",
+                                  WAREHOUSE = "DATA_LAKE_READER",
+                                  Database = "ENTERPRISE",
+                                  UID = "jacob.eisaguirre@hawaiianair.com",  # Replace Sys.getenv("UID") with your email
+                                  authenticator = "externalbrowser")
+  print("Database Connected!")  # Success message
+}, error = function(cond) {
+  print("Unable to connect to Database.")  # Error handling
+})
+
+# Set the schema for the session
+dbExecute(db_connection, "USE SCHEMA CREW_ANALYTICS")
+
+
+# Set current date variables
+current_date <- Sys.Date()  # Today's date
+week_prior <- current_date - 3  # Date three days prior
+week_prior_pairing_date <- current_date - 7  # Date seven days prior
+
+
+```
+
+## MS Schedule
+```{r}
+
+
+# Query master schedule data and clean it
+q_master_history <- paste0("SELECT * FROM CT_MASTER_HISTORY WHERE PAIRING_DATE BETWEEN '", week_prior, "' AND '", current_date, "';")
+view_masterhistory <- dbGetQuery(db_connection, q_master_history)
+
+
+```
+
+## Clean MS
+```{r}
+
+clean_ms <- view_masterhistory %>% 
+  select(CREW_INDICATOR, PAIRING_POSITION, CREW_ID, PAIRING_DATE, BID_PERIOD, LINE_TYPE) %>% 
+  group_by(CREW_INDICATOR, PAIRING_POSITION, CREW_ID, PAIRING_DATE) %>% 
+  distinct() %>% 
+  filter(!CREW_ID %in% c("6", "8", "10", "11", "35", "21", "7", "18", "1", "2", "3", "4", 
+                         "5", "9", "12", "13", "14", "15", "17", "19", "20", "25", "31", 
+                         "32", "33", "34", "36", "37")) %>% 
+  mutate(PAIRING_POSITION = if_else(PAIRING_POSITION == "RO", "FO", PAIRING_POSITION),
+         PAIRING_POSITION = if_else(CREW_INDICATOR == "FA", "FA", PAIRING_POSITION)) %>% 
+  drop_na() %>% 
+  ungroup()
+
+
+```
+
+## Gold Tier
+```{r}
+
+gold_ms <- clean_ms %>% 
+  group_by(PAIRING_POSITION, PAIRING_DATE, LINE_TYPE) %>% 
+  reframe(DAILY_COUNT = n())
+
+```
+
