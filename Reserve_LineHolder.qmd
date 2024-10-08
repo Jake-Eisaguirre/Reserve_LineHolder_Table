@@ -18,7 +18,7 @@ librarian::shelf(tidyverse, here, DBI, odbc)  # Load required packages
 
 ```
 
-## DB Connection
+## DB Connection - Enterprise
 ```{r}
 
 ### Database Connection: Connect to `ENTERPRISE` database using Snowflake
@@ -65,7 +65,8 @@ clean_mh <- view_masterhistory %>%
   select(CREW_INDICATOR, PAIRING_POSITION, CREW_ID, PAIRING_DATE, BASE, BID_PERIOD, LINE_TYPE, UPDATE_DATE, UPDATE_TIME) %>% 
   mutate(update_dt = paste(UPDATE_DATE, UPDATE_TIME, sep=" ")) %>% 
   group_by(CREW_INDICATOR, PAIRING_POSITION, CREW_ID, PAIRING_DATE) %>%
-  filter(update_dt == max(update_dt)) %>% 
+  filter(update_dt == max(update_dt),
+         LINE_TYPE == "B") %>% 
   filter(!CREW_ID %in% c("6", "8", "10", "11", "35", "21", "7", "18", "1", "2", "3", "4", 
                          "5", "9", "12", "13", "14", "15", "17", "19", "20", "25", "31", 
                          "32", "33", "34", "36", "37")) %>% 
@@ -92,10 +93,48 @@ clean_ms <- raw_ms%>%
   filter(!CREW_ID %in% c("6", "8", "10", "11", "35", "21", "7", "18", "1", "2", "3", "4", 
                          "5", "9", "12", "13", "14", "15", "17", "19", "20", "25", "31", 
                          "32", "33", "34", "36", "37")) %>% 
-  mutate(EQUIPMENT = if_else(PAIRING_POSITION == "FA", NA, EQUIPMENT)) %>% 
-  distinct() %>% 
-  filter(!EQUIPMENT == "33Y")
+  group_by(PAIRING_POSITION, CREW_ID, BID_PERIOD) %>% 
+  mutate(temp_id = cur_group_id()) %>% 
+  filter(!duplicated(temp_id)) %>% 
+  filter(!EQUIPMENT == "33Y") %>% 
+  mutate(EQUIPMENT = if_else(PAIRING_POSITION == "FA", NA, EQUIPMENT))
 
+
+
+```
+
+```{r}
+### Database Connection: Connect to `ENTERPRISE` database using Snowflake
+tryCatch({
+  db_connection_pg <- DBI::dbConnect(odbc::odbc(),
+                                  Driver = "SnowflakeDSIIDriver",
+                                  Server = "hawaiianair.west-us-2.azure.snowflakecomputing.com",
+                                  WAREHOUSE = "DATA_LAKE_READER",
+                                  Database = "PLAYGROUND",
+                                  UID = "jacob.eisaguirre@hawaiianair.com",  # Replace Sys.getenv("UID") with your email
+                                  authenticator = "externalbrowser")
+  print("Database Connected!")  # Success message
+}, error = function(cond) {
+  print("Unable to connect to Database.")  # Error handling
+})
+
+# Set the schema for the session
+dbExecute(db_connection_pg, "USE SCHEMA CREW_ANALYTICS")
+```
+
+## AA Reserve Utl 
+```{r}
+
+res_utl_q <- paste("select * from AA_RESERVE_UTILIZATION WHERE PAIRING_DATE BETWEEN '", week_prior, "' AND '", current_date, "';")
+
+raw_reserve_utl <- dbGetQuery(db_connection_pg, res_utl_q)
+
+clean_reserve_utl <- raw_reserve_utl %>% 
+  select(PAIRING_POSITION, PAIRING_DATE, BASE, RLV_SCR, EQUIPMENT) %>% 
+  rename(R = RLV_SCR) %>% 
+  mutate(BASE = if_else(PAIRING_POSITION %in% c("CA", "FO") & EQUIPMENT == "717", "HAL", BASE),
+         BASE = if_else(PAIRING_POSITION %in% c("CA", "FO") & !EQUIPMENT == "717", "HNL", BASE)) %>% 
+  select(!EQUIPMENT)
 
 ```
 
@@ -108,7 +147,8 @@ gold_ms <- clean_mh %>%
   group_by(PAIRING_POSITION, PAIRING_DATE, BASE, EQUIPMENT, LINE_TYPE) %>% 
   reframe(DAILY_COUNT = n()) %>% 
   pivot_wider(names_from = LINE_TYPE, values_from = DAILY_COUNT) %>% 
-  mutate(R_L_perc = (R/B)*100)
+  inner_join(clean_reserve_utl, by = c("PAIRING_POSITION", "PAIRING_DATE", "BASE")) %>% 
+  mutate(reserve_lineholder_perc = round((R/B)*100, 2))
 
 ```
 
