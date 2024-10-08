@@ -52,7 +52,7 @@ raw_date <- Sys.Date()
 
 
 # Query master schedule data and clean it
-q_master_history <- paste0("SELECT * FROM CT_MASTER_HISTORY WHERE PAIRING_DATE BETWEEN '", week_prior, "' AND '", current_date, "';")
+q_master_history <- paste0("SELECT * FROM CT_MASTER_HISTORY WHERE PAIRING_DATE >= '2023-01-01';")
 view_masterhistory <- dbGetQuery(db_connection, q_master_history)
 
 
@@ -81,7 +81,7 @@ clean_mh <- view_masterhistory %>%
 
 ```{r}
 q_master_sched <- paste0("select CREW_ID, EQUIPMENT, PAIRING_POSITION, BID_DATE as BID_PERIOD
-                   from CT_MASTER_SCHEDULE WHERE BID_DATE = '", previous_bid_period, "';")
+                   from CT_MASTER_SCHEDULE WHERE BID_DATE >=  '2023-01';")
 
 
 raw_ms <- dbGetQuery(db_connection, q_master_sched)
@@ -125,7 +125,7 @@ dbExecute(db_connection_pg, "USE SCHEMA CREW_ANALYTICS")
 ## AA Reserve Utl 
 ```{r}
 
-res_utl_q <- paste("select * from AA_RESERVE_UTILIZATION WHERE PAIRING_DATE BETWEEN '", week_prior, "' AND '", current_date, "';")
+res_utl_q <- paste("select * from AA_RESERVE_UTILIZATION WHERE PAIRING_DATE >= '2023-01-01';")
 
 raw_reserve_utl <- dbGetQuery(db_connection_pg, res_utl_q)
 
@@ -149,6 +149,8 @@ gold_ms <- clean_mh %>%
   pivot_wider(names_from = LINE_TYPE, values_from = DAILY_COUNT) %>% 
   inner_join(clean_reserve_utl, by = c("PAIRING_POSITION", "PAIRING_DATE", "BASE")) %>% 
   mutate(reserve_lineholder_perc = round((R/B)*100, 2))
+
+dbWriteTable(db_connection_pg, "AA_RESERVE_LINEHOLDER", gold_ms)
 
 ```
 
