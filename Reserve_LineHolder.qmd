@@ -38,13 +38,6 @@ tryCatch({
 # Set the schema for the session
 dbExecute(db_connection, "USE SCHEMA CREW_ANALYTICS")
 
-
-current_date <- Sys.Date()  # Today's date
-week_prior <- current_date - 3  # Date three days prior
-week_prior_pairing_date <- current_date - 7  # Date seven days prior
-previous_bid_period <- substr(as.character((current_date)), 1, 7)
-
-raw_date <- Sys.Date()
 ```
 
 ## MS Schedule
@@ -52,7 +45,15 @@ raw_date <- Sys.Date()
 
 
 # Query master schedule data and clean it
-q_master_history <- paste0("SELECT * FROM CT_MASTER_HISTORY WHERE PAIRING_DATE >= '2023-01-01';")
+
+# Create an SQL query string to select all data from the 'CT_MASTER_HISTORY' table
+# where the 'PAIRING_DATE' is on or after January 1, 2023.
+q_master_history <- paste0(
+  "SELECT * FROM CT_MASTER_HISTORY WHERE PAIRING_DATE >= '2023-01-01';"
+)
+
+# Execute the SQL query on the database using the 'db_connection' object
+# and store the result in the 'view_masterhistory' dataframe
 view_masterhistory <- dbGetQuery(db_connection, q_master_history)
 
 
@@ -61,43 +62,82 @@ view_masterhistory <- dbGetQuery(db_connection, q_master_history)
 ## Clean MH
 ```{r}
 
-clean_mh <- view_masterhistory %>% 
-  select(CREW_INDICATOR, PAIRING_POSITION, CREW_ID, PAIRING_DATE, BASE, BID_PERIOD, LINE_TYPE, UPDATE_DATE, UPDATE_TIME) %>% 
-  mutate(update_dt = paste(UPDATE_DATE, UPDATE_TIME, sep=" ")) %>% 
+clean_mh <- view_masterhistory %>%
+  # Select specific columns to keep in the dataframe
+  select(CREW_INDICATOR, PAIRING_POSITION, CREW_ID, PAIRING_DATE, BASE, BID_PERIOD, LINE_TYPE, UPDATE_DATE, UPDATE_TIME) %>%
+  
+  # Create a new column 'update_dt' by concatenating 'UPDATE_DATE' and 'UPDATE_TIME'
+  mutate(update_dt = paste(UPDATE_DATE, UPDATE_TIME, sep = " ")) %>%
+  
+  # Group the data by multiple columns: 'CREW_INDICATOR', 'PAIRING_POSITION', 'CREW_ID', and 'PAIRING_DATE'
   group_by(CREW_INDICATOR, PAIRING_POSITION, CREW_ID, PAIRING_DATE) %>%
+  
+  # Filter to keep only the rows with the most recent 'update_dt' for each group and
+  # where the 'LINE_TYPE' is "B" (BID)
   filter(update_dt == max(update_dt),
-         LINE_TYPE == "B") %>% 
+         LINE_TYPE == "B") %>%
+  
+  # Further filter to exclude rows where 'CREW_ID' is in the specified list of crew IDs
   filter(!CREW_ID %in% c("6", "8", "10", "11", "35", "21", "7", "18", "1", "2", "3", "4", 
                          "5", "9", "12", "13", "14", "15", "17", "19", "20", "25", "31", 
-                         "32", "33", "34", "36", "37")) %>% 
-  filter(!BASE == "CVG") %>% 
+                         "32", "33", "34", "36", "37")) %>%
+  
+  # Exclude rows where the 'BASE' is "CVG"
+  filter(!BASE == "CVG") %>%
+  
+  # Modify the 'PAIRING_POSITION' column: 
+  # If 'PAIRING_POSITION' is "RO", replace it with "FO"
+  # If 'CREW_INDICATOR' is "FA", replace 'PAIRING_POSITION' with "FA"
   mutate(PAIRING_POSITION = if_else(PAIRING_POSITION == "RO", "FO", PAIRING_POSITION),
-         PAIRING_POSITION = if_else(CREW_INDICATOR == "FA", "FA", PAIRING_POSITION)) %>% 
-  drop_na() %>% 
+         PAIRING_POSITION = if_else(CREW_INDICATOR == "FA", "FA", PAIRING_POSITION)) %>%
+  
+  # Remove rows with any missing values
+  drop_na() %>%
+  
+  # Ungroup the data (removes grouping structure)
   ungroup()
+
 
 
 ```
 
 ```{r}
-q_master_sched <- paste0("select CREW_ID, EQUIPMENT, PAIRING_POSITION, BID_DATE as BID_PERIOD
-                   from CT_MASTER_SCHEDULE WHERE BID_DATE >=  '2023-01';")
+# Create an SQL query string to select specific columns from the 'CT_MASTER_SCHEDULE' table
+# where 'BID_DATE' is on or after January 2023.
+q_master_sched <- paste0(
+  "select CREW_ID, EQUIPMENT, PAIRING_POSITION, BID_DATE as BID_PERIOD
+   from CT_MASTER_SCHEDULE WHERE BID_DATE >= '2023-01';"
+)
 
-
+# Execute the SQL query on the database using 'db_connection' and store the result
+# in a dataframe called 'raw_ms'
 raw_ms <- dbGetQuery(db_connection, q_master_sched)
+
 ```
 
 ## Clean MS
 ```{r}
-clean_ms <- raw_ms%>% 
+clean_ms <- raw_ms %>%
+  # Filter out rows where 'CREW_ID' is in the specified list of excluded crew IDs
   filter(!CREW_ID %in% c("6", "8", "10", "11", "35", "21", "7", "18", "1", "2", "3", "4", 
                          "5", "9", "12", "13", "14", "15", "17", "19", "20", "25", "31", 
-                         "32", "33", "34", "36", "37")) %>% 
-  group_by(PAIRING_POSITION, CREW_ID, BID_PERIOD) %>% 
-  mutate(temp_id = cur_group_id()) %>% 
-  filter(!duplicated(temp_id)) %>% 
-  filter(!EQUIPMENT == "33Y") %>% 
+                         "32", "33", "34", "36", "37")) %>%
+  
+  # Group the data by 'PAIRING_POSITION', 'CREW_ID', and 'BID_PERIOD'
+  group_by(PAIRING_POSITION, CREW_ID, BID_PERIOD) %>%
+  
+  # Create a temporary identifier 'temp_id' for each group using the current group ID
+  mutate(temp_id = cur_group_id()) %>%
+  
+  # Filter to remove duplicate groups based on 'temp_id'
+  filter(!duplicated(temp_id)) %>%
+  
+  # Further filter to exclude rows where 'EQUIPMENT' equals "33Y"
+  filter(!EQUIPMENT == "33Y") %>%
+  
+  # Modify 'EQUIPMENT': if 'PAIRING_POSITION' is "FA", set 'EQUIPMENT' to NA; otherwise, leave it as is
   mutate(EQUIPMENT = if_else(PAIRING_POSITION == "FA", NA, EQUIPMENT))
+
 
 
 
@@ -125,32 +165,61 @@ dbExecute(db_connection_pg, "USE SCHEMA CREW_ANALYTICS")
 ## AA Reserve Utl 
 ```{r}
 
-res_utl_q <- paste("select * from AA_RESERVE_UTILIZATION WHERE PAIRING_DATE >= '2023-01-01';")
+# Create an SQL query string to select all columns from 'AA_RESERVE_UTILIZATION'
+# where 'PAIRING_DATE' is on or after January 1, 2023.
+res_utl_q <- paste(
+  "select * from AA_RESERVE_UTILIZATION WHERE PAIRING_DATE >= '2023-01-01';"
+)
 
+# Execute the SQL query on the database using 'db_connection_pg' and store the result
+# in a dataframe called 'raw_reserve_utl'
 raw_reserve_utl <- dbGetQuery(db_connection_pg, res_utl_q)
 
-clean_reserve_utl <- raw_reserve_utl %>% 
-  select(PAIRING_POSITION, PAIRING_DATE, BASE, RLV_SCR, EQUIPMENT) %>% 
-  rename(R = RLV_SCR) %>% 
+# Clean the reserve utilization data
+clean_reserve_utl <- raw_reserve_utl %>%
+  # Select specific columns to keep in the dataframe
+  select(PAIRING_POSITION, PAIRING_DATE, BASE, RLV_SCR, EQUIPMENT) %>%
+  
+  # Rename 'RLV_SCR' column to 'R'
+  rename(R = RLV_SCR) %>%
+  
+  # Modify 'BASE' based on 'PAIRING_POSITION' and 'EQUIPMENT'
   mutate(BASE = if_else(PAIRING_POSITION %in% c("CA", "FO") & EQUIPMENT == "717", "HAL", BASE),
-         BASE = if_else(PAIRING_POSITION %in% c("CA", "FO") & !EQUIPMENT == "717", "HNL", BASE)) %>% 
+         BASE = if_else(PAIRING_POSITION %in% c("CA", "FO") & !EQUIPMENT == "717", "HNL", BASE)) %>%
+  
+  # Remove the 'EQUIPMENT' column from the dataframe
   select(!EQUIPMENT)
+
 
 ```
 
 
 ## Gold Tier
 ```{r}
+# Join 'clean_mh' and 'clean_ms' by matching columns: 'CREW_ID', 'BID_PERIOD', and 'PAIRING_POSITION'
+gold_ms <- clean_mh %>%
+  inner_join(clean_ms, by = c("CREW_ID", "BID_PERIOD", "PAIRING_POSITION")) %>%
+  
+  # Group the data by 'PAIRING_POSITION', 'PAIRING_DATE', 'BASE', 'EQUIPMENT', and 'LINE_TYPE'
+  group_by(PAIRING_POSITION, PAIRING_DATE, BASE, EQUIPMENT, LINE_TYPE) %>%
+  
+  # Reframe the grouped data to count the number of rows per group and store the result in 'DAILY_COUNT'
+  reframe(DAILY_COUNT = n()) %>%
+  
+  # Reshape the data from long to wide format: 'LINE_TYPE' becomes new column names,
+  # and the 'DAILY_COUNT' values fill these new columns
+  pivot_wider(names_from = LINE_TYPE, values_from = DAILY_COUNT) %>%
+  
+  # Join the resulting dataframe with 'clean_reserve_utl' by matching 'PAIRING_POSITION', 'PAIRING_DATE', and 'BASE'
+  inner_join(clean_reserve_utl, by = c("PAIRING_POSITION", "PAIRING_DATE", "BASE")) %>%
+  
+  # Calculate the percentage of reserve to lineholder and store in 'reserve_lineholder_perc'
+  # 'R' is the reserve count and 'B' is the lineholder count; the result is rounded to 2 decimal places
+  mutate(reserve_lineholder_perc = round((R / B) * 100, 2))
 
-gold_ms <- clean_mh %>% 
-  inner_join(clean_ms, by = c("CREW_ID", "BID_PERIOD", "PAIRING_POSITION")) %>% 
-  group_by(PAIRING_POSITION, PAIRING_DATE, BASE, EQUIPMENT, LINE_TYPE) %>% 
-  reframe(DAILY_COUNT = n()) %>% 
-  pivot_wider(names_from = LINE_TYPE, values_from = DAILY_COUNT) %>% 
-  inner_join(clean_reserve_utl, by = c("PAIRING_POSITION", "PAIRING_DATE", "BASE")) %>% 
-  mutate(reserve_lineholder_perc = round((R/B)*100, 2))
-
+# Write the resulting 'gold_ms' dataframe into the PostgreSQL database table 'AA_RESERVE_LINEHOLDER'
 dbWriteTable(db_connection_pg, "AA_RESERVE_LINEHOLDER", gold_ms)
+
 
 ```
 
